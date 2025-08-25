@@ -18,13 +18,12 @@ from dataclasses import asdict
 
 # Import du module IA Provider (changement d'import)
 try:
-    from ia_provider import manager, APIError, UnknownModelError
+    from ia_provider import manager, APIError, UnknownModelError, exporter
     from ia_provider.batch import (
         BatchRequest,
         BatchJobManager,
         BatchResult,
     )
-    from ia_provider.exporter import generer_export_docx
 except ImportError:
     st.error("Module ia_provider non trouvé. Assurez-vous que le package ia_provider est dans le même dossier.")
     st.stop()
@@ -647,7 +646,7 @@ with st.expander("Suivi des lots (Batches)"):
                                     "is_italic": reponse_italic,
                                 },
                             }
-                            buffer = generer_export_docx(results_export, styles)
+                            buffer = exporter.generer_export_docx(results_export, styles)
                             st.download_button(
                                 "⬇️ Export DOCX",
                                 data=buffer.getvalue(),
