@@ -45,8 +45,15 @@ def _load_local_batch_history() -> List[Dict]:
     return []
 
 
-def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
-    """Ajoute un lot soumis à l'historique local sans créer de doublon."""
+def _save_batch_to_local_history(
+    batch_id: str, provider: str, requests: Optional[List["BatchRequest"]] = None
+) -> None:
+    """
+    Ajoute un lot soumis à l'historique local sans créer de doublon.
+
+    Les prompts originaux sont conservés pour permettre leur association lors
+    de la récupération des résultats.
+    """
     path = Path(HISTORY_FILE)
     history = _load_local_batch_history()
 
@@ -59,6 +66,12 @@ def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
         "status": "running",
         "submitted_at": datetime.now().isoformat(),
     }
+
+    if requests:
+        new_entry["requests"] = [
+            {"custom_id": r.custom_id, "prompt_text": r.prompt_text} for r in requests
+        ]
+
     history.insert(0, new_entry)
     try:
         path.write_text(json.dumps(history, indent=4), encoding="utf-8")
@@ -75,6 +88,7 @@ class BatchRequest:
     """Représente une requête unique pour l'API Batch d'OpenAI."""
     custom_id: str
     body: Dict
+    prompt_text: Optional[str] = None
     method: str = "POST"
     url: str = "/v1/chat/completions"
 
@@ -101,6 +115,7 @@ class BatchResult:
     response: Optional[Dict] = None
     error: Optional[Dict] = None
     clean_response: Optional[str] = None
+    prompt_text: Optional[str] = None
     provider: str = "unknown"
     raw_data: Dict = field(default_factory=dict)
 
@@ -183,7 +198,7 @@ class OpenAIBatchMixin:
                 metadata=metadata or {}
             )
             print(f"✅ Batch créé avec succès: {batch_job.id}")
-            _save_batch_to_local_history(batch_job.id, "openai")
+            _save_batch_to_local_history(batch_job.id, "openai", requests)
             return batch_job.id
         except Exception as e:
             raise APIError(f"Échec de la création du batch: {e}")
@@ -247,7 +262,7 @@ class AnthropicBatchMixin:
             )
 
             print(f"✅ Batch Anthropic créé avec succès: {batch.id}")
-            _save_batch_to_local_history(batch.id, "anthropic")
+            _save_batch_to_local_history(batch.id, "anthropic", requests)
             return batch.id
 
         except Exception as e:
@@ -561,6 +576,15 @@ class BatchJobManager:
                             )
                         )
 
+                prompts_map = {}
+                for item in _load_local_batch_history():
+                    if item.get("id") == batch_id:
+                        for req in item.get("requests", []):
+                            prompts_map[req.get("custom_id")] = req.get("prompt_text")
+                        break
+                for res in results:
+                    res.prompt_text = prompts_map.get(res.custom_id)
+
                 return results
 
             # Provider OpenAI par défaut
@@ -614,6 +638,15 @@ class BatchJobManager:
                             raw_data=data,
                         )
                     )
+
+            prompts_map = {}
+            for item in _load_local_batch_history():
+                if item.get("id") == batch_id:
+                    for req in item.get("requests", []):
+                        prompts_map[req.get("custom_id")] = req.get("prompt_text")
+                    break
+            for res in results:
+                res.prompt_text = prompts_map.get(res.custom_id)
 
             return results
 
