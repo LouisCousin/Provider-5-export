@@ -14,6 +14,7 @@ import streamlit as st
 import os
 from datetime import datetime
 from typing import Optional, List, Dict
+from dataclasses import asdict
 
 # Import du module IA Provider (changement d'import)
 try:
@@ -23,6 +24,7 @@ try:
         BatchJobManager,
         BatchResult,
     )
+    from ia_provider.exporter import generer_export_docx
 except ImportError:
     st.error("Module ia_provider non trouvé. Assurez-vous que le package ia_provider est dans le même dossier.")
     st.stop()
@@ -130,6 +132,12 @@ def get_api_key(model_name: str) -> Optional[str]:
         return os.getenv(env_map[provider])
 
     return None
+
+
+def hex_to_rgb(hex_color: str) -> tuple:
+    """Convertit une couleur hexadécimale en tuple RGB."""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 
 # Dictionnaire des limites de tokens par modèle
@@ -345,6 +353,41 @@ with st.sidebar:
     if st.session_state.messages:
         st.metric("Messages", len(st.session_state.messages))
 
+    with st.expander("🎨 Personnaliser l'export DOCX"):
+        st.subheader("Style du Prompt")
+        prompt_font = st.selectbox(
+            "Police (Prompt)",
+            ["Arial", "Calibri", "Times New Roman"],
+            key="prompt_font",
+        )
+        prompt_size = st.slider(
+            "Taille (Prompt)",
+            8,
+            22,
+            12,
+            key="prompt_size",
+        )
+        prompt_color = st.color_picker("Couleur (Prompt)", "#1E1E1E", key="prompt_color")
+        prompt_bold = st.checkbox("Gras (Prompt)", value=True, key="prompt_bold")
+        prompt_italic = st.checkbox("Italique (Prompt)", value=False, key="prompt_italic")
+
+        st.subheader("Style de la Réponse")
+        reponse_font = st.selectbox(
+            "Police (Réponse)",
+            ["Arial", "Calibri", "Times New Roman"],
+            key="reponse_font",
+        )
+        reponse_size = st.slider(
+            "Taille (Réponse)",
+            8,
+            22,
+            12,
+            key="reponse_size",
+        )
+        reponse_color = st.color_picker("Couleur (Réponse)", "#1E1E1E", key="reponse_color")
+        reponse_bold = st.checkbox("Gras (Réponse)", value=False, key="reponse_bold")
+        reponse_italic = st.checkbox("Italique (Réponse)", value=False, key="reponse_italic")
+
 
 # =============================================================================
 # Interface principale
@@ -482,7 +525,8 @@ if generate_button and prompt:
 
                         batch_request = BatchRequest(
                             custom_id=f"req_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                            body=request_body
+                            body=request_body,
+                            prompt_text=prompt
                         )
 
                         batch_id = provider_instance.submit_batch(requests=[batch_request])
@@ -584,6 +628,33 @@ with st.expander("Suivi des lots (Batches)"):
                                 st.rerun()
                             else:
                                 st.error("Échec de l'annulation.")
+                    elif status == 'COMPLETED':
+                        results_export = batch_manager.get_results(batch['id'])
+                        if results_export:
+                            styles = {
+                                "prompt": {
+                                    "font_name": prompt_font,
+                                    "font_size": prompt_size,
+                                    "font_color_rgb": hex_to_rgb(prompt_color),
+                                    "is_bold": prompt_bold,
+                                    "is_italic": prompt_italic,
+                                },
+                                "response": {
+                                    "font_name": reponse_font,
+                                    "font_size": reponse_size,
+                                    "font_color_rgb": hex_to_rgb(reponse_color),
+                                    "is_bold": reponse_bold,
+                                    "is_italic": reponse_italic,
+                                },
+                            }
+                            buffer = generer_export_docx(results_export, styles)
+                            st.download_button(
+                                "⬇️ Export DOCX",
+                                data=buffer.getvalue(),
+                                file_name=f"batch_{batch['id']}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"download_{batch['id']}",
+                            )
 
                 if st.session_state[state_key]:
                     with st.spinner(f"Récupération des résultats pour {batch['id']}..."):
