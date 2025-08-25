@@ -8,9 +8,14 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List
 
 import markdown as md
+from bs4 import BeautifulSoup
+from bs4.element import NavigableString, Tag
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.shared import Pt, RGBColor
+from docx.text.run import Run
 
 
 class MarkdownToDocxConverter:
@@ -50,41 +55,82 @@ class MarkdownToDocxConverter:
     def _add_inline(self, paragraph, node) -> None:
         """Ajoute récursivement les noeuds inline à un paragraphe."""
 
-        if node.text:
-            run = paragraph.add_run(node.text)
-            self._apply_style(run)
+        if isinstance(node, NavigableString):
+            text = str(node)
+            if text:
+                run = paragraph.add_run(text)
+                self._apply_style(run)
+            return
 
-        for child in list(node):
-            if child.tag in {"strong", "b"}:
-                run = paragraph.add_run(child.text or "")
+        for child in node.children:
+            if isinstance(child, NavigableString):
+                text = str(child)
+                if text:
+                    run = paragraph.add_run(text)
+                    self._apply_style(run)
+            elif child.name in {"strong", "b"}:
+                run = paragraph.add_run(child.get_text())
                 self._apply_style(run, {"is_bold": True})
-            elif child.tag in {"em", "i"}:
-                run = paragraph.add_run(child.text or "")
+            elif child.name in {"em", "i"}:
+                run = paragraph.add_run(child.get_text())
                 self._apply_style(run, {"is_italic": True})
-            elif child.tag == "code":
-                run = paragraph.add_run(child.text or "")
+            elif child.name == "code":
+                run = paragraph.add_run(child.get_text())
                 self._apply_style(run)
                 run.font.name = "Consolas"
                 run._element.rPr.rFonts.set(qn("w:eastAsia"), "Consolas")
-            elif child.tag == "a":
-                text = child.text or ""
-                href = child.get("href", "")
-                run = paragraph.add_run(text)
-                self._apply_style(run)
-                if href and href != text:
-                    tail_run = paragraph.add_run(f" ({href})")
-                    self._apply_style(tail_run)
+            elif child.name == "a":
+                text = child.get_text()
+                href = child.get("href")
+                if href:
+                    run = self._add_hyperlink(paragraph, href, text)
+                    self._apply_style(run)
+                else:
+                    run = paragraph.add_run(text)
+                    self._apply_style(run)
             else:
                 self._add_inline(paragraph, child)
 
-            if child.tail:
-                tail = paragraph.add_run(child.tail)
-                self._apply_style(tail)
+    def _add_hyperlink(self, paragraph, url: str, text: str) -> Run:
+        """Ajoute un hyperlien cliquable au paragraphe."""
+
+        part = paragraph.part
+        r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
+
+        hyperlink = OxmlElement('w:hyperlink')
+        hyperlink.set(qn('r:id'), r_id)
+
+        new_run = OxmlElement('w:r')
+        r_pr = OxmlElement('w:rPr')
+        r_style = OxmlElement('w:rStyle')
+        r_style.set(qn('w:val'), 'Hyperlink')
+        r_pr.append(r_style)
+        new_run.append(r_pr)
+
+        text_elem = OxmlElement('w:t')
+        text_elem.text = text
+        new_run.append(text_elem)
+        hyperlink.append(new_run)
+        paragraph._p.append(hyperlink)
+
+        return Run(new_run, paragraph)
 
     def _process_element(self, elem, list_style: str | None = None) -> None:
         """Traite les éléments HTML convertis depuis le Markdown."""
 
-        tag = elem.tag
+        if isinstance(elem, NavigableString):
+            text = str(elem).strip()
+            if text:
+                paragraph = (
+                    self.doc.add_paragraph(style=list_style)
+                    if list_style
+                    else self.doc.add_paragraph()
+                )
+                run = paragraph.add_run(text)
+                self._apply_style(run)
+            return
+
+        tag = elem.name
         if tag in {"p", "li"}:
             paragraph = (
                 self.doc.add_paragraph(style=list_style)
@@ -92,41 +138,42 @@ class MarkdownToDocxConverter:
                 else self.doc.add_paragraph()
             )
             self._add_inline(paragraph, elem)
-            for child in list(elem):
-                if child.tag in {"ul", "ol"}:
-                    self._process_element(
-                        child,
-                        "List Bullet" if child.tag == "ul" else "List Number",
-                    )
+            for child in elem.find_all(["ul", "ol"], recursive=False):
+                self._process_element(
+                    child,
+                    "List Bullet" if child.name == "ul" else "List Number",
+                )
         elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             level = int(tag[1])
             paragraph = self.doc.add_heading(level=level)
             self._add_inline(paragraph, elem)
         elif tag == "ul":
-            for li in elem.findall("li"):
+            for li in elem.find_all("li", recursive=False):
                 self._process_element(li, "List Bullet")
         elif tag == "ol":
-            for li in elem.findall("li"):
+            for li in elem.find_all("li", recursive=False):
                 self._process_element(li, "List Number")
         elif tag == "pre":
-            code_text = "".join(elem.itertext()).strip()
+            code_text = "".join(elem.strings).strip()
             paragraph = self.doc.add_paragraph()
             run = paragraph.add_run(code_text)
             self._apply_style(run)
             run.font.name = "Consolas"
             run._element.rPr.rFonts.set(qn("w:eastAsia"), "Consolas")
         elif tag == "table":
-            rows = elem.findall("tr")
+            rows = elem.find_all("tr", recursive=False)
             if rows:
-                cols = len(rows[0].findall("th")) or len(rows[0].findall("td"))
+                first_row_cells = rows[0].find_all(["th", "td"], recursive=False)
+                cols = len(first_row_cells)
                 table = self.doc.add_table(rows=len(rows), cols=cols)
                 for r_idx, row in enumerate(rows):
-                    cells = row.findall("th") or row.findall("td")
+                    cells = row.find_all(["th", "td"], recursive=False)
                     for c_idx, cell in enumerate(cells):
                         paragraph = table.cell(r_idx, c_idx).paragraphs[0]
                         self._add_inline(paragraph, cell)
         else:
-            if elem.text:
+            text = elem.get_text(strip=True)
+            if text:
                 paragraph = self.doc.add_paragraph()
                 self._add_inline(paragraph, elem)
 
@@ -139,12 +186,10 @@ class MarkdownToDocxConverter:
         md_converter = md.Markdown(extensions=["fenced_code", "tables"])
         html = md_converter.convert(text)
 
-        from xml.etree import ElementTree as ET
-
-        root = ET.fromstring(f"<root>{html}</root>")
-        for elem in list(root):
-            self._process_element(elem)
-
+        soup = BeautifulSoup(html, "lxml")
+        if soup.body:
+            for elem in soup.body.find_all(recursive=False):
+                self._process_element(elem)
 
 def generer_export_docx(resultats: List[Any], styles: Dict[str, Dict[str, Any]]) -> io.BytesIO:
     """Génère un document DOCX à partir d'une liste de résultats de batch.
