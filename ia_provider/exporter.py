@@ -178,18 +178,28 @@ class MarkdownToDocxConverter:
                 self._add_inline(paragraph, elem)
 
     def add_markdown(self, text: str) -> None:
-        """Convertit un texte Markdown et l'ajoute au document."""
+        """Convertit un texte Markdown et l'ajoute au document avec un fallback."""
 
-        if not text:
-            return
+        try:
+            if not text:
+                return
 
-        md_converter = md.Markdown(extensions=["fenced_code", "tables"])
-        html = md_converter.convert(text)
+            md_converter = md.Markdown(extensions=["fenced_code", "tables"])
+            html = md_converter.convert(text)
 
-        soup = BeautifulSoup(html, "lxml")
-        if soup.body:
-            for elem in soup.body.find_all(recursive=False):
-                self._process_element(elem)
+            soup = BeautifulSoup(html, "lxml")
+            if soup.body:
+                for elem in soup.body.find_all(recursive=False):
+                    self._process_element(elem)
+        except Exception as e:  # pragma: no cover - fallback branch
+            warning_p = self.doc.add_paragraph()
+            warning_run = warning_p.add_run(
+                f"[Le formatage de ce bloc a échoué. Contenu original ci-dessous. Erreur : {e}]"
+            )
+            warning_run.font.italic = True
+            warning_run.font.color.rgb = RGBColor(120, 120, 120)
+
+            self.doc.add_paragraph(text)
 
 def generer_export_docx(resultats: List[Any], styles: Dict[str, Dict[str, Any]]) -> io.BytesIO:
     """Génère un document DOCX à partir d'une liste de résultats de batch.
