@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import markdown as md
 from bs4 import BeautifulSoup
@@ -201,14 +201,23 @@ class MarkdownToDocxConverter:
 
             self.doc.add_paragraph(text)
 
-def generer_export_docx(resultats: List[Any], styles: Dict[str, Dict[str, Any]]) -> io.BytesIO:
+def generer_export_docx(
+    resultats: List[Any],
+    styles_interface: Dict[str, Dict[str, Any]],
+    template_source: Optional[Dict[str, Any]] = None,
+) -> io.BytesIO:
     """Génère un document DOCX à partir d'une liste de résultats de batch.
+
+    ``styles_interface`` correspond aux styles définis dans l'interface.
+    ``template_source`` peut contenir des styles extraits d'un document importé
+    et est prioritaire sur ``styles_interface`` lorsqu'il est fourni.
 
     Chaque résultat doit contenir au minimum les champs ``status``,
     ``prompt_text`` et ``clean_response`` (ou ``response``).
     """
 
     document = Document()
+    styles = template_source if template_source is not None else styles_interface
     converter = MarkdownToDocxConverter(document, styles)
 
     succeeded: List[Dict[str, Any]] = []

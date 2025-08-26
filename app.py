@@ -18,7 +18,7 @@ from dataclasses import asdict
 
 # Import du module IA Provider (changement d'import)
 try:
-    from ia_provider import manager, APIError, UnknownModelError, exporter
+    from ia_provider import manager, APIError, UnknownModelError, exporter, importer
     from ia_provider.batch import (
         BatchRequest,
         BatchJobManager,
@@ -80,6 +80,8 @@ def init_session_state():
         st.session_state.api_keys = {}
     if 'generation_count' not in st.session_state:
         st.session_state.generation_count = 0
+    if 'source_template_styles' not in st.session_state:
+        st.session_state.source_template_styles = None
 
 
 init_session_state()
@@ -416,11 +418,38 @@ if st.session_state.conversation_mode and st.session_state.messages:
     st.divider()
 
 # Zone de saisie
-prompt = st.text_area(
-    "Votre question ou instruction:",
-    height=100,
-    placeholder="Exemple: Explique-moi la différence entre une liste et un tuple en Python"
-)
+st.subheader("Source du texte")
+source_mode = st.radio("Choisir la source", ["Saisie manuelle", "Importer un document"])
+
+prompt = ""
+prompt_text = ""
+
+if source_mode == "Saisie manuelle":
+    st.session_state.source_template_styles = None
+    prompt = st.text_area(
+        "Votre question ou instruction:",
+        height=100,
+        placeholder="Exemple: Explique-moi la différence entre une liste et un tuple en Python",
+    )
+    prompt_text = prompt
+else:
+    uploaded_file = st.file_uploader("Choisissez un fichier .docx ou .pdf", type=["docx", "pdf"])
+    if uploaded_file is not None:
+        texte_a_traiter, template_styles = importer.analyser_document(uploaded_file)
+        st.session_state.source_template_styles = template_styles
+        prompt_text = texte_a_traiter
+        if template_styles:
+            st.info("💡 Style du document source détecté. La mise en forme sera conservée au mieux.")
+            prompt = (
+                "Voici un texte. Reformule-le ou exécute la tâche demandée en gardant une structure similaire :\n\n"
+                f"{texte_a_traiter}"
+            )
+        else:
+            st.warning("⚠️ Style du document non détecté. Utilisation des styles par défaut via Markdown.")
+            prompt = (
+                "Voici un texte. Reformule-le ou exécute la tâche demandée et structure ta réponse en Markdown (titres #, listes *, gras **, etc.) :\n\n"
+                f"{texte_a_traiter}"
+            )
 
 col1, col2, col3 = st.columns([1, 1, 2])
 
@@ -525,7 +554,7 @@ if generate_button and prompt:
                         batch_request = BatchRequest(
                             custom_id=f"req_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                             body=request_body,
-                            prompt_text=prompt
+                            prompt_text=prompt_text
                         )
 
                         batch_id = provider_instance.submit_batch(requests=[batch_request])
@@ -630,7 +659,7 @@ with st.expander("Suivi des lots (Batches)"):
                     elif status == 'COMPLETED':
                         results_export = batch_manager.get_results(batch['id'])
                         if results_export:
-                            styles = {
+                            styles_interface = {
                                 "prompt": {
                                     "font_name": prompt_font,
                                     "font_size": prompt_size,
@@ -646,7 +675,10 @@ with st.expander("Suivi des lots (Batches)"):
                                     "is_italic": reponse_italic,
                                 },
                             }
-                            buffer = exporter.generer_export_docx(results_export, styles)
+                            template_source = st.session_state.get('source_template_styles')
+                            buffer = exporter.generer_export_docx(
+                                results_export, styles_interface, template_source
+                            )
                             st.download_button(
                                 "⬇️ Export DOCX",
                                 data=buffer.getvalue(),
