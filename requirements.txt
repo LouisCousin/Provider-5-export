@@ -5,3 +5,4 @@ python-docx
 markdown
 beautifulsoup4
 lxml
+PyMuPDF
